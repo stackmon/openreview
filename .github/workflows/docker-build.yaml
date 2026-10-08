@@ -66,9 +66,9 @@ jobs:
 
     - name: Login to Container Registry
       env:
-        SWR_URL: ${{ vars.SWR_URL || 'swr.eu-de.otc.t-systems.com' }}
-        SWR_USERNAME: ${{ vars.SWR_USERNAME }}
-        SWR_PASSWORD: ${{ vars.SWR_PASSWORD }}
+        SWR_URL: ${{ vars.SWR_URL || secrets.SWR_URL || 'swr.eu-de.otc.t-systems.com' }}
+        SWR_USERNAME: ${{ vars.SWR_USERNAME || secrets.SWR_USERNAME }}
+        SWR_PASSWORD: ${{ vars.SWR_PASSWORD || secrets.SWR_PASSWORD }}
       run: |
         set -euo pipefail
 
