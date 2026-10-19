@@ -28,11 +28,25 @@ const schema = z.object({
    */
   TRUSTED_ASSOCIATIONS: z
     .string()
-    .default("OWNER,MEMBER,COLLABORATOR")
+    .default("OWNER,MEMBER")
     .transform((value) =>
       value
         .split(",")
         .map((entry) => entry.trim().toUpperCase())
+        .filter(Boolean)
+    ),
+  /**
+   * Bot accounts allowed to trigger an automatic review even though they are
+   * not organization members. Dependabot and Renovate open pull requests in the
+   * repository itself, so their branches are still reviewed.
+   */
+  AUTO_REVIEW_BOTS: z
+    .string()
+    .default("dependabot[bot],renovate[bot]")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((entry) => entry.trim().toLowerCase())
         .filter(Boolean)
     ),
   WORKSPACE_ROOT: z.string().min(1).default("workspaces"),

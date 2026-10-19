@@ -46,12 +46,20 @@ identical review is never posted twice.
 
 Authorisation, because every review costs tokens:
 
-- A mention only starts a review when the comment author's `author_association` is in
-  `TRUSTED_ASSOCIATIONS` (default: `OWNER`, `MEMBER`, `COLLABORATOR`). Mentions from
-  everyone else are logged and ignored, which matters when the repository is public.
+- A mention only starts a review when the comment author is a member of the organization
+  that owns the repository (`author_association` is `OWNER` or `MEMBER`, configurable
+  with `TRUSTED_ASSOCIATIONS`). Outside collaborators (`COLLABORATOR`) are not members
+  and are ignored. Mentions from everyone else are logged and ignored, which matters when
+  the repository is public.
+- Automatic reviews run only when the pull request author is an organization member or a
+  trusted automation bot from `AUTO_REVIEW_BOTS` (default: `dependabot[bot]`,
+  `renovate[bot]`). A member can still ask for a review of somebody else's pull request
+  by mentioning the bot.
 - Pull requests from forks are skipped (`REVIEW_FORK_PRS=false`): a fork can only be
   pushed to by its owner. Pull requests for branches in the repository itself, including
   bot branches such as dependabot's, are reviewed as usual.
+- Replies without a mention do not trigger anything: the bot only acts on comments that
+  mention it. A reply inside an inline review thread works when it mentions the bot.
 
 Approval rules:
 
@@ -93,7 +101,8 @@ npm run dev            # builds and starts on http://127.0.0.1:8090
 | `LLM_API_KEY` | yes | API key for that endpoint |
 | `LLM_MODEL` | yes | Model name |
 | `AUTO_APPROVE` | no | Approve when no review requested changes (default `true`) |
-| `TRUSTED_ASSOCIATIONS` | no | `author_association` values allowed to start a review by mentioning the bot (default `OWNER,MEMBER,COLLABORATOR`) |
+| `TRUSTED_ASSOCIATIONS` | no | `author_association` values allowed to start a review by mentioning the bot (default `OWNER,MEMBER`) |
+| `AUTO_REVIEW_BOTS` | no | Bot logins allowed to trigger automatic reviews without organization membership (default `dependabot[bot],renovate[bot]`) |
 | `REVIEW_FORK_PRS` | no | Review pull requests from forks (default `false`) |
 | `WORKSPACE_ROOT` | no | Where pull request branches are checked out (default `workspaces`) |
 | `HOST` / `PORT` | no | Listen address (default `127.0.0.1:8090`) |

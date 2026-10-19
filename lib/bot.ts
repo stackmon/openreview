@@ -13,6 +13,7 @@ interface PullRequestEventPayload {
   action: string;
   installation?: { id: number };
   pull_request: {
+    author_association?: string;
     base: { ref: string };
     draft?: boolean;
     head: { ref: string; repo?: { full_name: string } | null; sha: string };
@@ -33,6 +34,14 @@ const REVIEW_ACTIONS = new Set([
 const isTrustedAssociation = (association: string | undefined): boolean =>
   association !== undefined &&
   env.TRUSTED_ASSOCIATIONS.includes(association.toUpperCase());
+
+const isTrustedPullRequestAuthor = (
+  login: string | undefined,
+  association: string | undefined
+): boolean =>
+  isTrustedAssociation(association) ||
+  (login !== undefined &&
+    env.AUTO_REVIEW_BOTS.includes(login.toLowerCase()));
 
 const collectMessages = async (
   thread: Thread<unknown, unknown>
@@ -58,8 +67,8 @@ const handleMention = async (thread: Thread, message: Message) => {
     author_association?: string;
   };
 
-  // Reviews cost money: only authors who can write to the repository may ask
-  // for one, everyone else is ignored.
+  // Reviews cost money: only members of the organization that owns the
+  // repository may ask for one, everyone else is ignored.
   if (!isTrustedAssociation(association)) {
     console.log(
       `[bot] ignored mention from ${message.author.userName} (${association ?? "unknown"}) on ${raw.repository.full_name}#${raw.prNumber}`
@@ -194,6 +203,18 @@ export const handlePullRequestEvent = async (
   if (!env.REVIEW_FORK_PRS && headRepo !== repoFullName) {
     console.log(
       `[bot] ignored ${action} for ${repoFullName}#${pull.number} from fork ${headRepo ?? "unknown"}`
+    );
+    return;
+  }
+
+  // Automatic reviews are for members of the repository-owning organization.
+  // A member can still request a review of somebody else's pull request with a
+  // mention; that path has its own association check.
+  if (
+    !isTrustedPullRequestAuthor(pull.user?.login, pull.author_association)
+  ) {
+    console.log(
+      `[bot] ignored ${action} for ${repoFullName}#${pull.number}: author ${pull.user?.login ?? "unknown"} (${pull.author_association ?? "unknown"}) is not an organization member`
     );
     return;
   }
