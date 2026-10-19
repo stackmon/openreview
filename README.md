@@ -2,9 +2,9 @@
 
 An AI code review bot for GitHub pull requests. This is a fork of
 [vercel-labs/openreview](https://github.com/vercel-labs/openreview) that runs as a
-plain Node service on your own host instead of on Vercel.
+plain Node service in a container instead of on Vercel.
 
-- **No serverless platform** — one `node dist/server.js` process behind a reverse proxy.
+- **No serverless platform** — one `node dist/server.js` process behind an ingress.
 - **Read-only** — the reviewed branch is checked out and read; the agent has no shell, no
   package manager and no build tooling, so nothing from the pull request is ever executed.
 - **Any OpenAI-compatible model** — point `LLM_BASE_URL` at your own gateway.
@@ -21,13 +21,13 @@ sequenceDiagram
     GH->>SVC: webhook: pull_request opened, issue_comment mention
     SVC->>GH: check out the pull request branch (read only)
     SVC->>LLM: run the review agent
-    LLM-->>SVC: tools: pull request, checks, files, grep, reply, requestChanges
+    LLM-->>SVC: tools: pull request, checks, files, grep, submitReview
     SVC->>GH: one review: the findings, approved or requesting changes
 ```
 
-The agent reads the diff, the CI results and the surrounding code, and writes with the
-`reply` tool; the pipeline submits exactly one review carrying that text, so a pull request
-never gets both a comment and a review for the same run.
+The agent reads the diff, the CI results and the surrounding code, and publishes with the
+`submitReview` tool; the pipeline submits exactly one review carrying that text, so a pull
+request never gets both a comment and a review for the same run.
 
 Triggers:
 
@@ -103,56 +103,35 @@ npm run dev            # builds and starts on http://127.0.0.1:8090
 
 ## Deploy
 
-The service serves two routes: `POST /webhook` (also aliased as `/api/webhooks`) and
-`GET /healthz`.
+The service serves `POST /webhook` and `GET /healthz`.
 
-1. Build the bundle on a machine with a normal toolchain:
-   `npm install && npm run build`
-2. Copy to the host: `dist/server.js`, `dist/server.js.map`, `.agents/` (the review
-   skills) and a `.env` with the variables above. The host needs Node 20.9+ and `git`
-   (for the read-only checkout) and nothing else.
-3. Run it under systemd:
+The included `Dockerfile` builds the bundle and copies it together with `.agents/skills`
+into a Node 20 image that also contains `git` (needed for the read-only checkout):
 
-```ini
-[Unit]
-Description=OpenReview
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/opt/openreview
-ExecStart=/usr/bin/node --env-file=/opt/openreview/.env /opt/openreview/dist/server.js
-Restart=always
-RestartSec=5
-
-# Reviews install dependencies and run project tooling on the host. Cap the
-# cgroup so a runaway command cannot starve the machine.
-CPUQuota=150%
-MemoryHigh=600M
-MemoryMax=800M
-TasksMax=256
-
-[Install]
-WantedBy=multi-user.target
+```bash
+docker build -t openreview .
+docker run --env-file .env -p 8090:8090 openreview
 ```
 
-4. Terminate TLS in front of it. With Caddy:
+On Kubernetes, run **one replica** with the `Recreate` strategy. Queued reviews and
+deduplication live in memory, so two replicas would review the same revision twice and
+split the queue between pods. Give the container CPU and memory limits and a writable
+`WORKSPACE_ROOT` (an `emptyDir` is enough; it only holds temporary checkouts).
 
-```
-https://bot.example.com {
-	reverse_proxy 127.0.0.1:8090
-}
-```
+Terminate TLS at the ingress and point the GitHub App webhook to
+`https://<host>/webhook`, content type `application/json`. The preprod deployment is
+managed by ArgoCD from the deployment configuration repository; the image tag is pinned
+in its OpenReview overlay.
 
 ## GitHub App
 
 Repository permissions: **Contents** read and write, **Issues** read and write,
-**Pull requests** read and write, **Metadata** read-only.
+**Pull requests** read and write, **Metadata** read-only. The service only reads
+contents; write access to contents is not required.
 
 Events: **Issue comment**, **Pull request**, **Pull request review comment**.
 
-Webhook URL: `https://<your-host>/webhook`, content type `application/json`.
+Webhook URL: `https://<host>/webhook`, content type `application/json`.
 
 ## Security
 
@@ -167,8 +146,8 @@ Webhook URL: `https://<your-host>/webhook`, content type `application/json`.
 - Each run gets its own temporary directory with mode `0700`, removed when the review
   finishes. Stale directories are cleaned up on startup.
 - The installation token is only used to check the branch out and to call the API.
-- The systemd unit caps the service cgroup (`CPUQuota`, `MemoryMax`, `TasksMax`) so a
-  runaway review cannot starve the host.
+- The container runs as a non-root user and should be given CPU and memory limits so a
+  runaway review cannot starve the node.
 
 ## Differences from upstream
 

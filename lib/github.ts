@@ -5,7 +5,7 @@ import { env } from "@/lib/env";
 
 let app: App | null = null;
 
-export const getGitHubApp = (): App => {
+const getGitHubApp = (): App => {
   if (!app) {
     if (
       !env.GITHUB_APP_ID ||

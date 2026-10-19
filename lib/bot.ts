@@ -9,13 +9,6 @@ import { getAppInfo, getInstallationOctokit } from "@/lib/github";
 import { AUTO_REVIEW_INSTRUCTION, enqueueReview } from "@/review";
 import type { ThreadMessage } from "@/review";
 
-interface ThreadState {
-  baseBranch: string;
-  prBranch: string;
-  prNumber: number;
-  repoFullName: string;
-}
-
 interface PullRequestEventPayload {
   action: string;
   installation?: { id: number };
@@ -104,15 +97,7 @@ const handleMention = async (thread: Thread, message: Message) => {
 
   const messages = await collectMessages(thread);
 
-  await thread.setState({
-    baseBranch: pr.base.ref,
-    prBranch: pr.head.ref,
-    prNumber,
-    repoFullName,
-  } satisfies ThreadState);
-
   await enqueueReview({
-    baseBranch: pr.base.ref,
     headSha: pr.head.sha,
     messages,
     prBranch: pr.head.ref,
@@ -214,7 +199,6 @@ export const handlePullRequestEvent = async (
   }
 
   await enqueueReview({
-    baseBranch: pull.base.ref,
     headSha: pull.head.sha,
     messages: [{ content: AUTO_REVIEW_INSTRUCTION, role: "user" }],
     prBranch: pull.head.ref,

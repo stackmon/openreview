@@ -7,7 +7,7 @@ import { env } from "@/lib/env";
 import { parseError } from "@/lib/error";
 import { removeStaleWorkspaces } from "@/lib/workspace";
 
-const WEBHOOK_PATHS = new Set(["/webhook", "/api/webhooks"]);
+const WEBHOOK_PATH = "/webhook";
 
 const readBody = async (request: IncomingMessage): Promise<string> => {
   const chunks: Buffer[] = [];
@@ -124,7 +124,7 @@ const server = createServer((request, response) => {
       return;
     }
 
-    if (request.method === "POST" && WEBHOOK_PATHS.has(path)) {
+    if (request.method === "POST" && path === WEBHOOK_PATH) {
       await handleWebhook(request, response);
       return;
     }

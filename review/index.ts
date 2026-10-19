@@ -17,7 +17,6 @@ export interface ThreadMessage {
 }
 
 export interface ReviewParams {
-  baseBranch: string;
   headSha: string;
   messages: ThreadMessage[];
   prBranch: string;
@@ -33,7 +32,6 @@ Read the code; this environment cannot run builds or tests. Report findings by s
 
 const runReview = async (params: ReviewParams): Promise<void> => {
   const {
-    baseBranch: _baseBranch,
     messages,
     prBranch,
     prNumber,
