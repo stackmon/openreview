@@ -1,6 +1,7 @@
 import type { Octokit } from "octokit";
 
 import { getAppInfo, getInstallationOctokit } from "@/lib/github";
+import type { Tenant } from "@/lib/tenants";
 
 export type ReviewDecision = "approve" | "comment" | "request_changes";
 
@@ -54,6 +55,7 @@ const botReviews = async (
  * request outside the tool, and a previous approval is not repeated.
  */
 export const submitReview = async (
+  tenant: Tenant,
   repoFullName: string,
   prNumber: number,
   decision: ReviewDecision,
@@ -61,8 +63,8 @@ export const submitReview = async (
   runStartedAt: Date
 ): Promise<SubmitResult> => {
   const [owner, repo] = repoFullName.split("/");
-  const octokit = await getInstallationOctokit();
-  const { slug } = await getAppInfo();
+  const octokit = await getInstallationOctokit(tenant);
+  const { slug } = await getAppInfo(tenant);
   const botLogin = `${slug}[bot]`;
 
   const { data: pull } = await octokit.rest.pulls.get({

@@ -5,9 +5,15 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getBot, handlePullRequestEvent } from "@/lib/bot";
 import { env } from "@/lib/env";
 import { parseError } from "@/lib/error";
+import type { Tenant } from "@/lib/tenants";
+import { getDefaultTenant, getTenant } from "@/lib/tenants";
 import { removeStaleWorkspaces } from "@/lib/workspace";
 
-const WEBHOOK_PATH = "/webhook";
+/**
+ * One path per tenant. `/webhook` keeps pointing at the first tenant in the
+ * registry so the original GitHub App keeps working while it is migrated.
+ */
+const WEBHOOK_PATH = /^\/webhook(?:\/([a-z0-9][a-z0-9-]*))?$/;
 
 const readBody = async (request: IncomingMessage): Promise<string> => {
   const chunks: Buffer[] = [];
@@ -19,12 +25,16 @@ const readBody = async (request: IncomingMessage): Promise<string> => {
   return Buffer.concat(chunks).toString("utf8");
 };
 
-const verifySignature = (body: string, signature: string | undefined): boolean => {
+const verifySignature = (
+  secret: string,
+  body: string,
+  signature: string | undefined
+): boolean => {
   if (!signature) {
     return false;
   }
 
-  const expected = `sha256=${createHmac("sha256", env.GITHUB_APP_WEBHOOK_SECRET)
+  const expected = `sha256=${createHmac("sha256", secret)
     .update(body)
     .digest("hex")}`;
 
@@ -58,12 +68,19 @@ const respond = (
 };
 
 const handleWebhook = async (
+  tenant: Tenant,
   request: IncomingMessage,
   response: ServerResponse
 ): Promise<void> => {
   const body = await readBody(request);
 
-  if (!verifySignature(body, request.headers["x-hub-signature-256"] as string)) {
+  if (
+    !verifySignature(
+      tenant.webhookSecret,
+      body,
+      request.headers["x-hub-signature-256"] as string
+    )
+  ) {
     respond(response, 401, "Invalid signature");
     return;
   }
@@ -71,7 +88,7 @@ const handleWebhook = async (
   const event = request.headers["x-github-event"] as string | undefined;
 
   if (event === "pull_request") {
-    let payload: Parameters<typeof handlePullRequestEvent>[0];
+    let payload: Parameters<typeof handlePullRequestEvent>[1];
 
     try {
       payload = JSON.parse(body);
@@ -82,14 +99,14 @@ const handleWebhook = async (
 
     respond(response, 202, "accepted");
 
-    handlePullRequestEvent(payload).catch((error: unknown) => {
+    handlePullRequestEvent(tenant, payload).catch((error: unknown) => {
       console.error(`[webhook] pull_request failed: ${parseError(error)}`);
     });
 
     return;
   }
 
-  const bot = await getBot();
+  const bot = await getBot(tenant);
   const handler = bot.webhooks.github;
 
   if (!handler) {
@@ -124,8 +141,19 @@ const server = createServer((request, response) => {
       return;
     }
 
-    if (request.method === "POST" && path === WEBHOOK_PATH) {
-      await handleWebhook(request, response);
+    const webhookMatch = WEBHOOK_PATH.exec(path);
+
+    if (request.method === "POST" && webhookMatch) {
+      const tenant = webhookMatch[1]
+        ? getTenant(webhookMatch[1])
+        : getDefaultTenant();
+
+      if (!tenant) {
+        respond(response, 404, "unknown tenant");
+        return;
+      }
+
+      await handleWebhook(tenant, request, response);
       return;
     }
 

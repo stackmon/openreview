@@ -6,10 +6,20 @@ const schema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  GITHUB_APP_ID: z.string().min(1),
-  GITHUB_APP_INSTALLATION_ID: z.coerce.number().int().positive(),
-  GITHUB_APP_PRIVATE_KEY: z.string().min(1),
-  GITHUB_APP_WEBHOOK_SECRET: z.string().min(1),
+  /**
+   * Optional organization for the legacy single-tenant variables below; with a
+   * registry the organization comes from each tenant's TENANTS_JSON entry.
+   */
+  GITHUB_ORG: z.string().min(1).optional(),
+  /**
+   * Legacy single-tenant credentials. A deployment with TENANTS_JSON ignores
+   * these; they remain for local development and for rolling back to the
+   * single-tenant configuration.
+   */
+  GITHUB_APP_ID: z.string().min(1).optional(),
+  GITHUB_APP_INSTALLATION_ID: z.coerce.number().int().positive().optional(),
+  GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
+  GITHUB_APP_WEBHOOK_SECRET: z.string().min(1).optional(),
   HOST: z.string().min(1).default("127.0.0.1"),
   LLM_API_KEY: z.string().min(1),
   LLM_BASE_URL: z.string().url(),

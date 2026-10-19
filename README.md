@@ -61,6 +61,30 @@ Authorisation, because every review costs tokens:
 - Replies without a mention do not trigger anything: the bot only acts on comments that
   mention it. A reply inside an inline review thread works when it mentions the bot.
 
+## Multiple organizations
+
+One deployment serves several organizations, each with its own private GitHub App,
+without per-organization processes or domains:
+
+- A tenant registry in the deployment configuration repository lists every app: a
+  route key, the organization, app id, installation id, bot slug, and the names of the
+  environment variables that hold that tenant's private key and webhook secret. In
+  preprod the registry is `tenants.json` in the OpenReview overlay and reaches the
+  service as `TENANTS_JSON`; the secrets themselves stay in Vault.
+- Every tenant answers on `POST /webhook/<key>`; the first registry entry also owns
+  the legacy `POST /webhook`. A delivery is verified with the target tenant's webhook
+  secret, and an event whose repository owner is not that tenant's organization is
+  ignored.
+- Each tenant gets its own chat adapter, installation token and review context, while
+  reviews keep running through the shared serial queue.
+
+Adding an organization: create a private GitHub App with the permissions and events
+below, install it on the organization, point its webhook at
+`https://<host>/webhook/<key>`, store the private key and webhook secret in Vault,
+add the matching environment variables and a `tenants.json` entry in the
+configuration repository, and let ArgoCD sync. No code change, no image rebuild and no
+kubectl access is required; the registry content hash rolls the Deployment.
+
 Approval rules:
 
 - The agent calls `requestChanges` when it finds a critical problem, and the review is
@@ -93,10 +117,12 @@ npm run dev            # builds and starts on http://127.0.0.1:8090
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `GITHUB_APP_ID` | yes | GitHub App id |
-| `GITHUB_APP_INSTALLATION_ID` | yes | Installation id on the target account |
-| `GITHUB_APP_PRIVATE_KEY` | yes | PEM private key (`\n` for newlines) |
-| `GITHUB_APP_WEBHOOK_SECRET` | yes | Webhook secret |
+| `TENANTS_JSON` | no | Multi-tenant registry (JSON array); when set it takes precedence over the `GITHUB_APP_*` credentials |
+| `GITHUB_APP_ID` | legacy | GitHub App id (single-tenant mode) |
+| `GITHUB_APP_INSTALLATION_ID` | legacy | Installation id on the target account |
+| `GITHUB_APP_PRIVATE_KEY` | legacy | PEM private key (`\n` for newlines) |
+| `GITHUB_APP_WEBHOOK_SECRET` | legacy | Webhook secret |
+| `GITHUB_ORG` | no | Organization for the legacy single-tenant mode |
 | `LLM_BASE_URL` | yes | OpenAI-compatible base URL, including `/v1` |
 | `LLM_API_KEY` | yes | API key for that endpoint |
 | `LLM_MODEL` | yes | Model name |
@@ -112,7 +138,7 @@ npm run dev            # builds and starts on http://127.0.0.1:8090
 
 ## Deploy
 
-The service serves `POST /webhook` and `GET /healthz`.
+The service serves `POST /webhook` and `POST /webhook/<tenant>` and `GET /healthz`.
 
 The included `Dockerfile` builds the bundle and copies it together with `.agents/skills`
 into a Node 20 image that also contains `git` (needed for the read-only checkout):
@@ -140,7 +166,9 @@ contents; write access to contents is not required.
 
 Events: **Issue comment**, **Pull request**, **Pull request review comment**.
 
-Webhook URL: `https://<host>/webhook`, content type `application/json`.
+Webhook URL: `https://<host>/webhook/<tenant>` (or `https://<host>/webhook` for the
+first registry entry), content type `application/json`. In multi-tenant mode each
+organization gets its own private app, installed only on that organization.
 
 ## Security
 

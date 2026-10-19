@@ -1,6 +1,7 @@
 import { env } from "@/lib/env";
 import { parseError } from "@/lib/error";
 import { getInstallationOctokit } from "@/lib/github";
+import { getTenantOrThrow } from "@/lib/tenants";
 import type { Workspace } from "@/lib/workspace";
 import { createWorkspace, removeWorkspace } from "@/lib/workspace";
 
@@ -22,6 +23,8 @@ export interface ReviewParams {
   prBranch: string;
   prNumber: number;
   repoFullName: string;
+  /** Registry key of the tenant whose GitHub App owns this repository. */
+  tenantKey: string;
   threadId: string;
   trigger: "auto" | "mention";
 }
@@ -36,11 +39,13 @@ const runReview = async (params: ReviewParams): Promise<void> => {
     prBranch,
     prNumber,
     repoFullName,
+    tenantKey,
     threadId,
   } = params;
 
-  const token = await getGitHubToken();
-  const octokit = await getInstallationOctokit();
+  const tenant = getTenantOrThrow(tenantKey);
+  const token = await getGitHubToken(tenant);
+  const octokit = await getInstallationOctokit(tenant);
   const [owner, repo] = repoFullName.split("/");
 
   // The pull request may have been closed while this review was queued: a
@@ -115,6 +120,7 @@ const runReview = async (params: ReviewParams): Promise<void> => {
         : "comment";
 
     const result = await submitReview(
+      tenant,
       repoFullName,
       prNumber,
       decision,
@@ -131,6 +137,7 @@ const runReview = async (params: ReviewParams): Promise<void> => {
     // separate comment — unless it is already on the pull request.
     if (!(result.submitted || result.duplicate || decision === "comment")) {
       const retry = await submitReview(
+        tenant,
         repoFullName,
         prNumber,
         "comment",
@@ -145,6 +152,7 @@ const runReview = async (params: ReviewParams): Promise<void> => {
   } catch (error) {
     try {
       await addPRComment(
+        tenant,
         threadId,
         `## Error
 

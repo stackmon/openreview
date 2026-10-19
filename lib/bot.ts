@@ -6,6 +6,8 @@ import type { Message, Thread } from "chat";
 
 import { env } from "@/lib/env";
 import { getAppInfo, getInstallationOctokit } from "@/lib/github";
+import type { Tenant } from "@/lib/tenants";
+import { getDefaultTenant, tenantOwnsRepository } from "@/lib/tenants";
 import { AUTO_REVIEW_INSTRUCTION, enqueueReview } from "@/review";
 import type { ThreadMessage } from "@/review";
 
@@ -58,10 +60,21 @@ const collectMessages = async (
   return messages;
 };
 
-let botInstance: Chat | null = null;
-
-const handleMention = async (thread: Thread, message: Message) => {
+const handleMention = async (
+  tenant: Tenant,
+  thread: Thread,
+  message: Message
+) => {
   const raw = message.raw as GitHubRawMessage;
+
+  // Each route is bound to one organization; a webhook that arrives on the
+  // wrong route is ignored instead of being processed with these credentials.
+  if (!tenantOwnsRepository(tenant, raw.repository.full_name)) {
+    console.log(
+      `[bot] ignored mention on ${raw.repository.full_name}#${raw.prNumber}: repository is not in ${tenant.org}`
+    );
+    return;
+  }
 
   const { author_association: association } = raw.comment as {
     author_association?: string;
@@ -79,7 +92,7 @@ const handleMention = async (thread: Thread, message: Message) => {
   const repoFullName = raw.repository.full_name;
   const { prNumber } = raw;
 
-  const octokit = await getInstallationOctokit();
+  const octokit = await getInstallationOctokit(tenant);
   const [owner, repo] = repoFullName.split("/");
 
   const { data: pr } = await octokit.rest.pulls.get({
@@ -112,38 +125,43 @@ const handleMention = async (thread: Thread, message: Message) => {
     prBranch: pr.head.ref,
     prNumber,
     repoFullName,
+    tenantKey: tenant.key,
     threadId: thread.id,
     trigger: "mention",
   });
 };
 
-export const getBot = (): Promise<Chat> => initBot();
+const bots = new Map<string, Promise<Chat>>();
 
-const initBot = async (): Promise<Chat> => {
-  if (botInstance) {
-    return botInstance;
+export const getBot = (tenant?: Tenant): Promise<Chat> => {
+  const target = tenant ?? getDefaultTenant();
+  let bot = bots.get(target.key);
+
+  if (!bot) {
+    bot = initBot(target).catch((error: unknown) => {
+      // A failed init should not be cached: the next webhook may retry.
+      bots.delete(target.key);
+      throw error;
+    });
+
+    bots.set(target.key, bot);
   }
 
-  if (
-    !env.GITHUB_APP_ID ||
-    !env.GITHUB_APP_INSTALLATION_ID ||
-    !env.GITHUB_APP_PRIVATE_KEY ||
-    !env.GITHUB_APP_WEBHOOK_SECRET
-  ) {
-    throw new Error("Missing required GitHub App environment variables");
-  }
+  return bot;
+};
 
-  const appInfo = await getAppInfo();
+const initBot = async (tenant: Tenant): Promise<Chat> => {
+  const appInfo = await getAppInfo(tenant);
 
-  botInstance = new Chat({
+  const botInstance = new Chat({
     adapters: {
       github: createGitHubAdapter({
-        appId: env.GITHUB_APP_ID,
+        appId: tenant.appId,
         botUserId: appInfo.botUserId,
-        installationId: env.GITHUB_APP_INSTALLATION_ID,
-        privateKey: env.GITHUB_APP_PRIVATE_KEY.replaceAll("\\n", "\n"),
+        installationId: tenant.installationId,
+        privateKey: tenant.privateKey,
         userName: appInfo.slug,
-        webhookSecret: env.GITHUB_APP_WEBHOOK_SECRET,
+        webhookSecret: tenant.webhookSecret,
       }),
     },
     logger: env.LOG_LEVEL,
@@ -151,14 +169,16 @@ const initBot = async (): Promise<Chat> => {
     userName: appInfo.slug,
   });
 
-  botInstance.onNewMention(handleMention);
+  botInstance.onNewMention((thread, message) =>
+    handleMention(tenant, thread, message)
+  );
 
   botInstance.onSubscribedMessage(async (thread, message) => {
     if (!message.isMention) {
       return;
     }
 
-    await handleMention(thread, message);
+    await handleMention(tenant, thread, message);
   });
 
   return botInstance;
@@ -172,6 +192,7 @@ const initBot = async (): Promise<Chat> => {
  * commit the agent pushed from starting another review.
  */
 export const handlePullRequestEvent = async (
+  tenant: Tenant,
   payload: PullRequestEventPayload
 ): Promise<void> => {
   const { action, installation, pull_request: pull, repository, sender } = payload;
@@ -180,11 +201,20 @@ export const handlePullRequestEvent = async (
     return;
   }
 
-  if (installation?.id && installation.id !== env.GITHUB_APP_INSTALLATION_ID) {
+  if (installation?.id && installation.id !== tenant.installationId) {
     return;
   }
 
-  const { slug } = await getAppInfo();
+  const repoFullName = repository.full_name;
+
+  if (!tenantOwnsRepository(tenant, repoFullName)) {
+    console.log(
+      `[bot] ignored ${action} for ${repoFullName}#${pull.number}: repository is not in ${tenant.org}`
+    );
+    return;
+  }
+
+  const { slug } = await getAppInfo(tenant);
   const botLogin = `${slug}[bot]`;
 
   if (sender?.login === botLogin || pull.user?.login === botLogin) {
@@ -195,7 +225,6 @@ export const handlePullRequestEvent = async (
     return;
   }
 
-  const repoFullName = repository.full_name;
   const headRepo = pull.head.repo?.full_name;
 
   // A fork can only be pushed to by its owner, who has no access here, so it is
@@ -225,6 +254,7 @@ export const handlePullRequestEvent = async (
     prBranch: pull.head.ref,
     prNumber: pull.number,
     repoFullName,
+    tenantKey: tenant.key,
     threadId: `github:${repoFullName}:${pull.number}`,
     trigger: "auto",
   });
